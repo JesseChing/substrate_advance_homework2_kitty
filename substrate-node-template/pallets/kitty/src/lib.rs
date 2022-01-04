@@ -18,13 +18,13 @@ pub mod pallet {
 		transactional
 	};
 	use frame_support::traits::UnixTime;
-	// use sp_io::hashing::blake2_128;
+	use sp_io::hashing::blake2_128;
 	use scale_info::TypeInfo;
 
 	#[cfg(feature = "std")]
 	use frame_support::serde::{Deserialize, Serialize};
 	use frame_support::StorageHasher;
-
+	
 	type AccountOf<T> = <T as frame_system::Config>::AccountId;
 	type BalanceOf<T> =
 		<<T as Config>::Currency as Currency<<T as frame_system::Config>::AccountId>>::Balance;
@@ -33,7 +33,7 @@ pub mod pallet {
 	#[derive(Clone, Encode, Decode, PartialEq, RuntimeDebug, TypeInfo)]
 	#[scale_info(skip_type_params(T))]
 	pub struct Kitty<T: Config> {
-		pub dna: u128,  
+		pub dna: [u8; 16],  
 		pub price: Option<BalanceOf<T>>,
 		pub gender: Gender,
 		pub owner: AccountOf<T>,
@@ -112,6 +112,7 @@ pub mod pallet {
 		Transferred(T::AccountId, T::AccountId, T::Hash),
 		/// A Kitty was successfully bought. \[buyer, seller, kitty_id, bid_price\]
 		Bought(T::AccountId, T::AccountId, T::Hash, BalanceOf<T>),
+		Wei(),
 	}
 
 	// Storage items.
@@ -132,29 +133,29 @@ pub mod pallet {
 	pub(super) type KittiesOwned<T: Config> =
 		StorageMap<_, T::KittyIndex, T::AccountId, BoundedVec<T::Hash, T::MaxKittyOwned>, ValueQuery>;
 
-	// Our pallet's genesis configuration.
-	#[pallet::genesis_config]
-	pub struct GenesisConfig<T: Config> {
-		pub kitties: Vec<(T::AccountId, u128, Gender)>,
-	}
-
-	// Required to implement default for GenesisConfig.
-	#[cfg(feature = "std")]
-	impl<T: Config> Default for GenesisConfig<T> {
-		fn default() -> GenesisConfig<T> {
-			GenesisConfig { kitties: vec![] }
+		#[pallet::genesis_config]
+		pub struct GenesisConfig<T: Config> {
+			pub kitties: Vec<(T::AccountId, [u8; 16], Gender)>,
 		}
-	}
-
-	#[pallet::genesis_build]
-	impl<T: Config> GenesisBuild<T> for GenesisConfig<T> {
-		fn build(&self) {
-			// When building a kitty from genesis config, we require the dna and gender to be supplied.
-			for (acct, dna, gender) in &self.kitties {
-				let _ = <Pallet<T>>::mint(acct, Some(*dna), Some(gender.clone()));
+	
+		// Required to implement default for GenesisConfig.
+		#[cfg(feature = "std")]
+		impl<T: Config> Default for GenesisConfig<T> {
+			fn default() -> GenesisConfig<T> {
+				GenesisConfig { kitties: vec![] }
 			}
 		}
-	}
+	
+		#[pallet::genesis_build]
+		impl<T: Config> GenesisBuild<T> for GenesisConfig<T> {
+			fn build(&self) {
+				// When building a kitty from genesis config, we require the dna and gender to be supplied.
+				for (acct, dna, gender) in &self.kitties {
+					let _ = <Pallet<T>>::mint(acct, Some(dna.clone()), Some(gender.clone()));
+				}
+			}
+		}
+	
 
 	#[pallet::hooks]
 	impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {}
@@ -194,10 +195,9 @@ pub mod pallet {
 		) -> DispatchResult {
 			let sender = ensure_signed(origin)?;
 
-			// Ensure the kitty exists and is called by the kitty owner
-			ensure!(Self::is_kitty_owner(&kitty_id, &sender)?, <Error<T>>::NotKittyOwner);
-
 			let mut kitty = Self::kitties(&kitty_id).ok_or(<Error<T>>::KittyNotExist)?;
+
+			ensure!(Self::is_kitty_owner(&kitty_id, &sender)?, <Error<T>>::NotKittyOwner);
 
 			kitty.price = new_price.clone();
 			<Kitties<T>>::insert(&kitty_id, kitty);
@@ -252,7 +252,6 @@ pub mod pallet {
 				Err(<Error<T>>::KittyNotForSale)?;
 			}
 			// let a = T::MaxKittyReverse::get();
-
 			// T::Currency::can_reserve(&buyer, T::MaxKittyReverse::get());
 
 			// Check the buyer has enough free balance
@@ -275,32 +274,50 @@ pub mod pallet {
 			Ok(())
 		}
 
-		
+		#[pallet::weight(100)]
+		pub fn breed_kitty(
+			origin: OriginFor<T>,
+			parent1: T::Hash,
+			parent2: T::Hash
+		) -> DispatchResult {
+			let sender = ensure_signed(origin)?;
+
+			// Check: Verify `sender` owns both kitties (and both kitties exist).
+			ensure!(Self::is_kitty_owner(&parent1, &sender)?, <Error<T>>::NotKittyOwner);
+			ensure!(Self::is_kitty_owner(&parent2, &sender)?, <Error<T>>::NotKittyOwner);
+
+			let new_dna = Self::breed_dna(&parent1, &parent2)?;
+			Self::mint(&sender, Some(new_dna), None)?;
+
+			Ok(())
+		}
+
 	}
 
 	//** Our helper functions.**//
 
 	impl<T: Config> Pallet<T> {
+
 		fn gen_gender() -> Gender {
-			// let random = T::KittyRandomness::random(&b"gender"[..]).0;
-			// match random.as_ref()[0] % 2 {
-			// 	0 => Gender::Male,
-			// 	_ => Gender::Female,
-			// }
-
-			Gender::Male
+			let random = T::KittyRandomness::random(&b"gender"[..]).0;
+			match random.as_ref()[0] % 2 {
+				0 => Gender::Male,
+				_ => Gender::Female,
+			}
 		}
 
-		fn gen_dna() -> u128 {
-
-			T::UnixTime::now().as_millis()
+		fn gen_dna() -> [u8; 16] {
+			let payload = (
+				T::KittyRandomness::random(&b"dna"[..]).0,
+				<frame_system::Pallet<T>>::block_number(),
+			);
+			payload.using_encoded(blake2_128)
 		}
 
 
-		// Helper to mint a Kitty.
 		pub fn mint(
 			owner: &T::AccountId,
-			dna: Option<u128>,
+			dna: Option<[u8; 16]>,
 			gender: Option<Gender>,
 		) -> Result<T::Hash, Error<T>> {
 			let kitty = Kitty::<T> {
@@ -384,6 +401,17 @@ pub mod pallet {
 			Self::deposit_event(Event::Transferred(from, to, kitty_id));
 
 			Ok(())
+		}
+
+		pub fn breed_dna(parent1: &T::Hash, parent2: &T::Hash) -> Result<[u8; 16], Error<T>> {
+			let dna1 = Self::kitties(parent1).ok_or(<Error<T>>::KittyNotExist)?.dna;
+			let dna2 = Self::kitties(parent2).ok_or(<Error<T>>::KittyNotExist)?.dna;
+
+			let mut new_dna = Self::gen_dna();
+			for i in 0..new_dna.len() {
+				new_dna[i] = (new_dna[i] & dna1[i]) | (!new_dna[i] & dna2[i]);
+			}
+			Ok(new_dna)
 		}
 
 

@@ -44,8 +44,6 @@ pub use pallet_timestamp;
 // use sp_version::RuntimeVersion;
 pub use sp_runtime::{Perbill, Permill};
 
-
-
 // Configure a mock runtime to test the pallet.
 frame_support::construct_runtime!(
 	pub enum Test where
@@ -55,12 +53,11 @@ frame_support::construct_runtime!(
 	{
 		System: frame_system::{Pallet, Call, Config, Storage, Event<T>},
 		KittyModule: pallet_kitty::{Pallet, Call, Storage, Event<T>},
-		RandomnessCollectiveFlip: pallet_randomness_collective_flip::{Pallet, Storage},
+		CollectiveFlip: pallet_randomness_collective_flip::{Pallet, Storage},
 		Balances: pallet_balances::{Pallet, Call, Storage, Event<T>},
 		Timestamp: pallet_timestamp::{Pallet, Call, Storage, Inherent},
 	}
 );
-
 
 const NORMAL_DISPATCH_RATIO: Perbill = Perbill::from_percent(75);
 
@@ -70,7 +67,7 @@ parameter_types! {
 	pub const ExistentialDeposit: u128 = 1;
 	pub const MaxLocks: u32 = 50;
 	//质押的token数量
-	pub const MaxKittyReverse: u128 = 100;
+	pub const MaxKittyReverse: u128 = 3;
 
 	pub const MinimumPeriod : u64 = 5;
 
@@ -78,6 +75,9 @@ parameter_types! {
 		::with_sensible_defaults(2 * WEIGHT_PER_SECOND, NORMAL_DISPATCH_RATIO);
 	pub BlockLength: frame_system::limits::BlockLength = frame_system::limits::BlockLength
 		::max_with_normal_ratio(5 * 1024 * 1024, NORMAL_DISPATCH_RATIO);
+
+	//kitty最大拥有数量
+	pub const MaxKittyOwned : u32 = 3;
 }
 
 impl pallet_timestamp::Config for Test {
@@ -131,8 +131,8 @@ impl frame_system::Config for Test {
 impl pallet_kitty::Config for Test {
 	type Event = Event;
 	type Currency = Balances;
-	type KittyRandomness = RandomnessCollectiveFlip;
-	type MaxKittyOwned = ConstU32<32>;
+	type KittyRandomness = CollectiveFlip;
+	type MaxKittyOwned = MaxKittyOwned;
 	type KittyIndex = Twox64Concat;
 	type MaxKittyReverse = MaxKittyReverse;
 	type UnixTime = Timestamp;
